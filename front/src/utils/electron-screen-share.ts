@@ -1,8 +1,8 @@
 /**
- * Electron 环境下的屏幕共享工具
+ * 客户端环境下的屏幕共享工具
  */
 
-// 检测是否在 Electron 环境中
+// 检测是否在客户端环境中
 export function isElectron(): boolean {
   return typeof window !== 'undefined' && 
          typeof (window as any).require === 'function'
@@ -16,11 +16,11 @@ export interface DesktopSource {
 }
 
 /**
- * 获取 Electron 的屏幕共享源列表
+ * 获取客户端的屏幕共享源列表
  */
 export async function getDesktopSources(): Promise<DesktopSource[]> {
   if (!isElectron()) {
-    console.warn('不在 Electron 环境中')
+    console.warn('不在客户端环境中')
     return []
   }
 
@@ -36,12 +36,12 @@ export async function getDesktopSources(): Promise<DesktopSource[]> {
 }
 
 /**
- * 在 Electron 中获取屏幕共享流
+ * 在客户端中获取屏幕共享流
  * @param sourceId desktopCapturer 返回的 source id
  */
 export async function getElectronDisplayMedia(sourceId?: string): Promise<MediaStream> {
   if (!isElectron()) {
-    throw new Error('此方法仅在 Electron 环境中可用')
+    throw new Error('此方法仅在客户端环境中可用')
   }
 
   try {
@@ -74,7 +74,7 @@ export async function getElectronDisplayMedia(sourceId?: string): Promise<MediaS
 
     return stream
   } catch (error) {
-    console.error('获取 Electron 屏幕流失败:', error)
+    console.error('获取客户端屏幕流失败:', error)
     throw error
   }
 }
@@ -84,7 +84,7 @@ export async function getElectronDisplayMedia(sourceId?: string): Promise<MediaS
  */
 export async function getDisplayMediaCompat(options?: DisplayMediaStreamOptions): Promise<MediaStream> {
   if (isElectron()) {
-    // Electron 环境：使用 desktopCapturer
+    // 客户端环境：使用 desktopCapturer
     return getElectronDisplayMedia()
   } else {
     // 浏览器环境：使用标准 API

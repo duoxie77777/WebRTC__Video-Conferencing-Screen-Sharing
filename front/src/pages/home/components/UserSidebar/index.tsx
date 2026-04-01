@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { List, Avatar, Button, Space, Badge, Modal, message, Tag } from 'antd'
-import { UserOutlined, PhoneOutlined, LogoutOutlined, PlusOutlined, TeamOutlined } from '@ant-design/icons'
+import { UserOutlined, PhoneOutlined, LogoutOutlined, PlusOutlined, TeamOutlined, MenuFoldOutlined, MenuOutlined } from '@ant-design/icons'
 import { getSocket } from '../../../../utils/socket'
 import type { Participant } from '../../../../types/participant'
 
@@ -13,6 +13,8 @@ interface UserSidebarProps {
     onCreateRoom: () => void
     onInviteUser: (target: string) => void
     onLeaveRoom: () => void
+    visible?: boolean
+    onToggleVisible?: () => void
 }
 
 const UserSidebar = ({
@@ -23,6 +25,8 @@ const UserSidebar = ({
     onCreateRoom,
     onInviteUser,
     onLeaveRoom,
+    visible = true,
+    onToggleVisible,
 }: UserSidebarProps) => {
     const [onlineUsers, setOnlineUsers] = useState<string[]>([])
 
@@ -72,8 +76,14 @@ const UserSidebar = ({
     }
 
     return (
-        <div className="w-64 h-screen bg-white border-r border-gray-200 p-4 flex flex-col justify-between">
-            <div className="flex flex-col gap-3 overflow-hidden">
+        <div className="relative">
+            <div 
+                className={`w-64 h-screen bg-white border-r border-gray-200 p-4 flex flex-col justify-between transition-all duration-300 ${
+                    visible ? 'translate-x-0' : '-translate-x-full'
+                }`}
+                style={{ position: visible ? 'relative' : 'absolute', zIndex: 20 }}
+            >
+                <div className="flex flex-col gap-3 overflow-hidden">
                 {/* 当前用户 */}
                 <div className="pb-3 border-b border-gray-100 flex items-center gap-2">
                     <Avatar style={{ backgroundColor: '#1677ff' }}>
@@ -178,6 +188,26 @@ const UserSidebar = ({
                 退出登录
             </Button>
         </div>
+
+        {/* 切换按钮 - 附着在侧边栏右边缘 */}
+        {onToggleVisible && (
+            <Button
+                type="primary"
+                icon={visible ? <MenuFoldOutlined /> : <MenuOutlined />}
+                onClick={onToggleVisible}
+                className={`absolute top-1/2 -translate-y-1/2 transition-all duration-300 shadow-lg ${
+                    visible ? 'left-64' : 'left-0'
+                }`}
+                style={{
+                    borderTopLeftRadius: 0,
+                    borderBottomLeftRadius: 0,
+                    height: '60px',
+                    width: '32px',
+                    zIndex: 30,
+                }}
+            />
+        )}
+    </div>
     )
 }
 

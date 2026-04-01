@@ -7,6 +7,7 @@ import RegionPicker from './components/RegionPicker'
 import Login from '../login'
 import { connectAndLogin, disconnectSocket, getSocket } from '../../utils/socket'
 import { MeshRTCManager } from '../../utils/webrtc'
+import { RemoteControlManager, RemoteControlExecutor, canBeControlled } from '../../utils/remote-control'
 import type { Participant } from '../../types/participant'
 
 const MeetingRoom = () => {
@@ -29,6 +30,12 @@ const MeetingRoom = () => {
 
     // 当前谁在共享屏幕
     const [screenSharer, setScreenSharer] = useState<string | null>(null)
+    
+    // 远程控制状态
+    const [controllingUser, setControllingUser] = useState<string | null>(null)  // 正在控制的用户
+    const [sidebarVisible, setSidebarVisible] = useState(true)  // 侧边栏可见性
+    const remoteControlManagerRef = useRef<RemoteControlManager>(new RemoteControlManager())
+    const remoteControlExecutorRef = useRef<RemoteControlExecutor>(new RemoteControlExecutor())
 
     const rtcRef = useRef<MeshRTCManager | null>(null)
 
@@ -111,6 +118,39 @@ const MeetingRoom = () => {
         manager.onScreenShareStopped = () => {
             setIsSharing(false)
             setScreenSharer(null)
+        }
+
+        // 远程控制请求回调
+        manager.onRemoteControlRequest = async (user) => {
+            // 平台检测:只有客户端可以被控制
+            if (!canBeControlled) {
+                message.warning('Web网页端不支持被控制功能,请使用客户端')
+                return false
+            }
+
+            return new Promise((resolve) => {
+                Modal.confirm({
+                    title: '远程控制请求',
+                    content: `${user} 想要控制你的屏幕,是否允许?`,
+                    okText: '允许',
+                    cancelText: '拒绝',
+                    onOk: async () => {
+                        message.success(`已允许 ${user} 控制`)
+                        // 设置权限
+                        await remoteControlExecutorRef.current.setPermission(user, true)
+                        resolve(true)
+                    },
+                    onCancel: () => {
+                        message.info(`已拒绝 ${user} 的控制请求`)
+                        resolve(false)
+                    },
+                })
+            })
+        }
+
+        // 远程控制事件回调（被控制端）
+        manager.onRemoteControlEvent = async (user, event) => {
+            await remoteControlExecutorRef.current.executeEvent(event, user)
         }
 
         rtcRef.current = manager
@@ -336,6 +376,73 @@ const MeetingRoom = () => {
         setUsername(null)
     }
 
+    // ======================== 远程控制 ========================
+    const handleRequestRemoteControl = useCallback(async (targetUser: string) => {
+        if (!rtcRef.current) return
+
+        // 如果已经在控制,则停止控制
+        if (controllingUser === targetUser) {
+            remoteControlManagerRef.current.stopControl()
+            setControllingUser(null)
+            message.info(`已停止控制 ${targetUser}`)
+            return
+        }
+
+        // 请求控制权限
+        message.loading({ content: '请求控制中...', key: 'remote-control' })
+        const allowed = await rtcRef.current.requestRemoteControl(targetUser)
+
+        if (!allowed) {
+            message.error({ content: `${targetUser} 拒绝了控制请求`, key: 'remote-control' })
+            return
+        }
+
+        message.success({ content: `已获得 ${targetUser} 的控制权限`, key: 'remote-control' })
+        setControllingUser(targetUser)
+
+        // 获取对方的屏幕流 video 元素
+        const participant = participants.get(targetUser)
+        if (!participant?.screenStream) {
+            message.error('无法获取对方的屏幕流')
+            setControllingUser(null)
+            return
+        }
+
+        // 查找显示该屏幕流的 video 元素
+        setTimeout(() => {
+            const videos = document.querySelectorAll('video')
+            let targetVideo: HTMLVideoElement | null = null
+
+            videos.forEach((video) => {
+                if (video.srcObject === participant.screenStream) {
+                    targetVideo = video
+                }
+            })
+
+            if (!targetVideo) {
+                message.error('无法找到屏幕共享画面')
+                setControllingUser(null)
+                return
+            }
+
+            // 启动远程控制
+            remoteControlManagerRef.current.startControl(
+                targetVideo, 
+                (event) => {
+                    rtcRef.current?.sendRemoteControlEvent(targetUser, event)
+                },
+                () => {
+                    // ESC 键停止控制的回调
+                    remoteControlManagerRef.current.stopControl()
+                    setControllingUser(null)
+                    message.info(`已停止控制 ${targetUser}`)
+                }
+            )
+
+            message.success(`正在控制 ${targetUser} 的屏幕 (按住 Ctrl 暂停，按 ESC 停止)`)
+        }, 500)
+    }, [controllingUser, participants])
+
     if (!username) {
         return <Login onLoginSuccess={handleLoginSuccess} />
     }
@@ -351,6 +458,8 @@ const MeetingRoom = () => {
                 onCreateRoom={handleCreateRoom}
                 onInviteUser={handleInviteUser}
                 onLeaveRoom={handleLeaveRoom}
+                visible={sidebarVisible}
+                onToggleVisible={() => setSidebarVisible(!sidebarVisible)}
             />
             <MeetingContent
                 currentUser={username}
@@ -367,6 +476,8 @@ const MeetingRoom = () => {
                 onStopScreenShare={handleStopScreenShare}
                 onToggleCamera={handleToggleCamera}
                 onToggleMic={handleToggleMic}
+                onRequestRemoteControl={handleRequestRemoteControl}
+                controllingUser={controllingUser}
             />
             <RegionPicker
                 open={regionPickerOpen}

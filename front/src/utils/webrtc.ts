@@ -35,6 +35,7 @@ function createSilentStream(): MediaStream {
 export interface PeerInfo {
   pc: RTCPeerConnection
   screenPc: RTCPeerConnection | null
+  dataChannel: RTCDataChannel | null  // 数据通道（用于远程控制）
 }
 
 /**
@@ -52,6 +53,8 @@ export class MeshRTCManager {
   onRemoteScreenStream: ((user: string, stream: MediaStream) => void) | null = null
   onPeerLeft: ((user: string) => void) | null = null
   onScreenShareStopped: (() => void) | null = null
+  onRemoteControlRequest: ((user: string) => Promise<boolean>) | null = null  // 远程控制请求
+  onRemoteControlEvent: ((user: string, event: any) => void) | null = null  // 远程控制事件
 
   constructor(currentUser: string) {
     this.currentUser = currentUser
@@ -97,11 +100,24 @@ export class MeshRTCManager {
   // ======================== 接听来电（被动方） ========================
   async answerCall(from: string, offer: RTCSessionDescriptionInit) {
     const stream = this._getOrCreateLocalStream()
-    const pc = this._createPC(from, 'call')
 
-    stream.getTracks().forEach((track) => {
-      pc.addTrack(track, stream)
-    })
+    // 检查是否已有连接（重新协商场景）
+    let pc: RTCPeerConnection
+    const existingInfo = this.peers.get(from)
+
+    if (existingInfo) {
+      // 重新协商：使用已有的 PeerConnection
+      console.log('[WebRTC] 检测到重新协商，使用已有连接')
+      pc = existingInfo.pc
+    } else {
+      // 新连接：创建新的 PeerConnection
+      console.log('[WebRTC] 创建新的 PeerConnection')
+      pc = this._createPC(from, 'call')
+
+      stream.getTracks().forEach((track) => {
+        pc.addTrack(track, stream)
+      })
+    }
 
     await pc.setRemoteDescription(new RTCSessionDescription(offer))
     const answer = await pc.createAnswer()
@@ -146,7 +162,7 @@ export class MeshRTCManager {
   private sourceVideo: HTMLVideoElement | null = null
 
   async startScreenShare(targetUsers: string[]): Promise<MediaStream> {
-    // 使用兼容性包装，自动适配 Electron 和浏览器环境
+    // 使用兼容性包装，自动适配客户端和浏览器环境
     this.screenStream = await getDisplayMediaCompat({
       video: true,
       audio: true,
@@ -314,6 +330,239 @@ export class MeshRTCManager {
     }
   }
 
+  // ======================== 远程控制功能 ========================
+
+  /** 请求控制远端用户 */
+  async requestRemoteControl(targetUser: string): Promise<boolean> {
+    const info = this.peers.get(targetUser)
+    if (!info) {
+      console.error('[远程控制] 未找到目标用户的连接')
+      return false
+    }
+
+    // 检查 PeerConnection 状态
+    if (info.pc.connectionState !== 'connected') {
+      console.warn('[远程控制] PeerConnection 未连接，当前状态:', info.pc.connectionState)
+      // 等待连接建立
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error('PeerConnection 连接超时'))
+        }, 8000)
+
+        const checkConnection = () => {
+          const state = info.pc.connectionState
+          if (state === 'connected') {
+            clearTimeout(timeout)
+            info.pc.removeEventListener('connectionstatechange', checkConnection)
+            console.log('[远程控制] PeerConnection 已连接')
+            resolve()
+          } else if (state === 'failed' || state === 'closed') {
+            clearTimeout(timeout)
+            info.pc.removeEventListener('connectionstatechange', checkConnection)
+            reject(new Error(`PeerConnection 连接失败: ${state}`))
+          }
+        }
+
+        info.pc.addEventListener('connectionstatechange', checkConnection)
+        checkConnection() // 立即检查一次
+      }).catch((err) => {
+        console.error('[远程控制] PeerConnection 连接失败:', err)
+        return false
+      })
+    }
+
+    // 创建或获取 DataChannel
+    let needsNegotiation = false
+    if (!info.dataChannel) {
+      console.log('[远程控制] 创建 DataChannel')
+      info.dataChannel = info.pc.createDataChannel('remote-control', {
+        ordered: true,
+      })
+      this._setupDataChannel(targetUser, info.dataChannel)
+      needsNegotiation = true
+    }
+
+    // 如果刚创建了 DataChannel，需要重新协商
+    if (needsNegotiation) {
+      console.log('[远程控制] DataChannel 已创建，触发重新协商')
+      try {
+        const offer = await info.pc.createOffer()
+        await info.pc.setLocalDescription(offer)
+
+        console.log('[远程控制] 发送新的 offer 到信令服务器（使用 call 事件）')
+        // 使用现有的 call 事件机制进行重新协商
+        getSocket().emit('call', {
+          to: targetUser,
+          from: this.currentUser,
+          offer: offer,
+        })
+      } catch (error) {
+        console.error('[远程控制] 重新协商失败:', error)
+        return false
+      }
+    }
+
+    // 等待 DataChannel 打开
+    if (info.dataChannel.readyState !== 'open') {
+      console.log('[远程控制] 等待 DataChannel 打开，当前状态:', info.dataChannel.readyState)
+
+      const opened = await new Promise<boolean>((resolve) => {
+        const timeout = setTimeout(() => {
+          console.error('[远程控制] DataChannel 打开超时，当前状态:', info.dataChannel?.readyState)
+          resolve(false)
+        }, 15000) // 增加到15秒，因为需要等待协商完成
+
+        const handleOpen = () => {
+          clearTimeout(timeout)
+          info.dataChannel?.removeEventListener('open', handleOpen)
+          console.log('[远程控制] DataChannel 已打开')
+          resolve(true)
+        }
+
+        const handleError = (e: Event) => {
+          clearTimeout(timeout)
+          info.dataChannel?.removeEventListener('error', handleError)
+          console.error('[远程控制] DataChannel 错误:', e)
+          resolve(false)
+        }
+
+        if (info.dataChannel!.readyState === 'open') {
+          clearTimeout(timeout)
+          resolve(true)
+        } else {
+          info.dataChannel!.addEventListener('open', handleOpen)
+          info.dataChannel!.addEventListener('error', handleError)
+        }
+      })
+
+      if (!opened) {
+        console.error('[远程控制] DataChannel 未能在规定时间内打开')
+        return false
+      }
+    }
+
+    console.log('[远程控制] DataChannel 已就绪，发送控制请求')
+
+    // 发送控制请求
+    return new Promise((resolve) => {
+      const requestId = `req_${Date.now()}`
+
+      try {
+        info.dataChannel!.send(JSON.stringify({
+          type: 'control-request',
+          from: this.currentUser,
+          requestId,
+        }))
+        console.log('[远程控制] 已发送控制请求')
+      } catch (error) {
+        console.error('[远程控制] 发送请求失败:', error)
+        resolve(false)
+        return
+      }
+
+      // 监听响应（超时 10 秒）
+      const timeout = setTimeout(() => {
+        console.warn('[远程控制] 请求响应超时')
+        resolve(false)
+      }, 10000)
+
+      const handleMessage = (event: MessageEvent) => {
+        if (!info.dataChannel) return
+        try {
+          const data = JSON.parse(event.data)
+          if (data.type === 'control-response' && data.requestId === requestId) {
+            clearTimeout(timeout)
+            info.dataChannel.removeEventListener('message', handleMessage)
+            console.log('[远程控制] 收到响应:', data.allowed ? '允许' : '拒绝')
+            resolve(data.allowed)
+          }
+        } catch {
+          // 忽略解析错误
+        }
+      }
+
+      if (info.dataChannel) {
+        info.dataChannel.addEventListener('message', handleMessage)
+      }
+    })
+  }
+
+  /** 发送远程控制事件（鼠标/键盘） */
+  sendRemoteControlEvent(targetUser: string, event: {
+    type: 'mouse-move' | 'mouse-click' | 'mouse-wheel' | 'keyboard'
+    [key: string]: string
+  }) {
+    const info = this.peers.get(targetUser)
+    if (!info?.dataChannel || info.dataChannel.readyState !== 'open') {
+      console.warn(`[远程控制] DataChannel 未就绪: ${targetUser}`)
+      return
+    }
+
+    try {
+      info.dataChannel.send(JSON.stringify({
+        type: 'control-event',
+        from: this.currentUser,
+        event,
+      }))
+    } catch (error) {
+      console.error('[远程控制] 发送事件失败:', error)
+    }
+  }
+
+  /** 设置是否允许被远程控制 */
+  setRemoteControlAllowed(user: string, allowed: boolean) {
+    const info = this.peers.get(user)
+    if (!info?.dataChannel) return
+
+    info.dataChannel.send(JSON.stringify({
+      type: 'control-permission',
+      from: this.currentUser,
+      allowed,
+    }))
+  }
+
+  private _setupDataChannel(remoteUser: string, channel: RTCDataChannel) {
+    channel.onopen = () => {
+      console.log(`[DataChannel] 已连接到 ${remoteUser}`)
+    }
+
+    channel.onmessage = async (event) => {
+      try {
+        const data = JSON.parse(event.data)
+
+        // 处理控制请求
+        if (data.type === 'control-request') {
+          const allowed = await this.onRemoteControlRequest?.(data.from) ?? false
+          channel.send(JSON.stringify({
+            type: 'control-response',
+            requestId: data.requestId,
+            allowed,
+          }))
+        }
+
+        // 处理控制事件
+        if (data.type === 'control-event') {
+          this.onRemoteControlEvent?.(data.from, data.event)
+        }
+
+        // 处理权限变更
+        if (data.type === 'control-permission') {
+          console.log(`[远程控制] ${data.from} ${data.allowed ? '允许' : '拒绝'} 控制`)
+        }
+      } catch (error) {
+        console.error('[DataChannel] 消息处理失败:', error)
+      }
+    }
+
+    channel.onerror = (error) => {
+      console.error(`[DataChannel] 错误:`, error)
+    }
+
+    channel.onclose = () => {
+      console.log(`[DataChannel] 已断开与 ${remoteUser}`)
+    }
+  }
+
   /** 替换所有 PeerConnection 的轨道 */
   private _replaceTrackAll(kind: 'audio' | 'video', newTrack: MediaStreamTrack) {
     if (!this.localStream) return
@@ -360,13 +609,23 @@ export class MeshRTCManager {
       }
     }
 
+    // 监听远端创建的 DataChannel
+    pc.ondatachannel = (event) => {
+      const channel = event.channel
+      const info = this.peers.get(remoteUser)
+      if (info) {
+        info.dataChannel = channel
+        this._setupDataChannel(remoteUser, channel)
+      }
+    }
+
     if (type === 'call') {
       // 存储 peer 信息
       const existing = this.peers.get(remoteUser)
       if (existing) {
         existing.pc = pc
       } else {
-        this.peers.set(remoteUser, { pc, screenPc: null })
+        this.peers.set(remoteUser, { pc, screenPc: null, dataChannel: null })
       }
     }
 
