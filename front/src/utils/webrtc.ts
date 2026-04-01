@@ -1,4 +1,5 @@
 import { getSocket } from './socket'
+import { getDisplayMediaCompat } from './electron-screen-share'
 
 const ICE_SERVERS: RTCConfiguration = {
   iceServers: [
@@ -43,7 +44,7 @@ export interface PeerInfo {
 export class MeshRTCManager {
   private currentUser: string
   private localStream: MediaStream | null = null
-  private screenStream: MediaStream | null = null
+  screenStream: MediaStream | null = null
   private peers: Map<string, PeerInfo> = new Map()
 
   // 外部回调
@@ -86,6 +87,11 @@ export class MeshRTCManager {
       to: targetUser,
       offer,
     })
+
+    // 如果当前正在共享屏幕，也向新用户发送屏幕流
+    if (this.screenStream) {
+      await this.sendScreenStreamToUser(targetUser, this.screenStream)
+    }
   }
 
   // ======================== 接听来电（被动方） ========================
@@ -140,7 +146,8 @@ export class MeshRTCManager {
   private sourceVideo: HTMLVideoElement | null = null
 
   async startScreenShare(targetUsers: string[]): Promise<MediaStream> {
-    this.screenStream = await navigator.mediaDevices.getDisplayMedia({
+    // 使用兼容性包装，自动适配 Electron 和浏览器环境
+    this.screenStream = await getDisplayMediaCompat({
       video: true,
       audio: true,
     })
@@ -158,9 +165,9 @@ export class MeshRTCManager {
     targetUsers: string[],
     region: { x: number; y: number; width: number; height: number }
   ): Promise<MediaStream> {
-    // 获取整个屏幕
-    const fullStream = await navigator.mediaDevices.getDisplayMedia({
-      video: { displaySurface: 'monitor' },
+    // 获取整个屏幕（使用兼容性包装）
+    const fullStream = await getDisplayMediaCompat({
+      video: { displaySurface: 'monitor' } as MediaTrackConstraints,
       audio: false,
     })
 
@@ -230,23 +237,28 @@ export class MeshRTCManager {
   /** 内部：发送屏幕流给所有 peers */
   private async _sendScreenStream(targetUsers: string[], stream: MediaStream) {
     for (const user of targetUsers) {
-      const screenPc = this._createPC(user, 'screen')
-      const info = this.peers.get(user)
-      if (info) info.screenPc = screenPc
-
-      stream.getTracks().forEach((track) => {
-        screenPc.addTrack(track, stream)
-      })
-
-      const offer = await screenPc.createOffer()
-      await screenPc.setLocalDescription(offer)
-
-      getSocket().emit('start-screen-share', {
-        from: this.currentUser,
-        to: user,
-        offer,
-      })
+      await this.sendScreenStreamToUser(user, stream)
     }
+  }
+
+  /** 向单个用户发送屏幕流（可外部调用） */
+  async sendScreenStreamToUser(user: string, stream: MediaStream) {
+    const screenPc = this._createPC(user, 'screen')
+    const info = this.peers.get(user)
+    if (info) info.screenPc = screenPc
+
+    stream.getTracks().forEach((track) => {
+      screenPc.addTrack(track, stream)
+    })
+
+    const offer = await screenPc.createOffer()
+    await screenPc.setLocalDescription(offer)
+
+    getSocket().emit('start-screen-share', {
+      from: this.currentUser,
+      to: user,
+      offer,
+    })
   }
 
   stopScreenShare(targetUsers: string[]) {

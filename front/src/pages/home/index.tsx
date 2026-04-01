@@ -140,6 +140,22 @@ const MeetingRoom = () => {
         const onUserJoined = (data: { username: string }) => {
             addParticipant(data.username)
             message.info(`${data.username} 加入了会议`)
+            
+            // 如果当前正在共享屏幕，向新用户发送屏幕流
+            if (isSharing && rtcRef.current?.screenStream) {
+                // 等待新用户建立基础连接后再发送屏幕流
+                setTimeout(async () => {
+                    try {
+                        const stream = rtcRef.current?.screenStream
+                        if (stream) {
+                            await rtcRef.current?.sendScreenStreamToUser(data.username, stream)
+                            console.log(`已向新用户 ${data.username} 发送屏幕流`)
+                        }
+                    } catch (err) {
+                        console.error('向新用户发送屏幕流失败:', err)
+                    }
+                }, 1500)
+            }
         }
 
         // 有用户离开房间
@@ -212,7 +228,7 @@ const MeetingRoom = () => {
             socket.off('media-status', onMediaStatus)
             socket.off('stop-screen-share', onStopScreenShare)
         }
-    }, [username, addParticipant, joinRoom])
+    }, [username, addParticipant, joinRoom, isSharing])
 
     // 邀请用户
     const handleInviteUser = useCallback((target: string) => {
