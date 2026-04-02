@@ -9,8 +9,14 @@ const ICE_SERVERS: RTCConfiguration = {
       urls: 'turn:16.163.147.228:3478?transport=udp',
       username: 'testuser',
       credential: 'testpass123'
+    },
+    {
+      urls: 'turn:16.163.147.228:3478?transport=tcp',
+      username: 'testuser',
+      credential: 'testpass123'
     }
   ],
+  iceTransportPolicy: 'all'
 }
 
 /** 创建静默流（黑屏视频 + 无声音频） */
@@ -99,6 +105,24 @@ export class MeshRTCManager {
     // 如果当前正在共享屏幕，也向新用户发送屏幕流
     if (this.screenStream) {
       await this.sendScreenStreamToUser(targetUser, this.screenStream)
+    }
+  }
+
+  /** 重新协商所有 PeerConnection，确保视频轨道更新 */
+  async reNegotiateAllPeers() {
+    for (const [user, info] of this.peers) {
+      try {
+        const offer = await info.pc.createOffer()
+        await info.pc.setLocalDescription(offer)
+        
+        getSocket().emit('call', {
+          from: this.currentUser,
+          to: user,
+          offer,
+        })
+      } catch (error) {
+        console.error(`与 ${user} 重新协商失败:`, error)
+      }
     }
   }
 
@@ -320,6 +344,8 @@ export class MeshRTCManager {
       const newTrack = camStream.getVideoTracks()[0]
       this._replaceTrackAll('video', newTrack)
       newTrack.enabled = true
+      // 重新协商所有 PeerConnection，确保视频轨道更新
+      await this.reNegotiateAllPeers()
     } else {
       this.localStream?.getVideoTracks().forEach((t) => (t.enabled = false))
     }
