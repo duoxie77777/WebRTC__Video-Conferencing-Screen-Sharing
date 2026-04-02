@@ -67,32 +67,34 @@ const UserCard = ({ name, isSelf, cameraOn, micOn, sharing, stream, onStopShare,
                 />
             )}
 
-            {/* 头像覆盖层 */}
-            <div className="relative z-[1] flex flex-col items-center gap-2 pointer-events-none">
-                <div className={`w-16 h-16 rounded-full ${avatarBg} border-2 flex items-center justify-center backdrop-blur-sm`}>
-                    {sharing ? (
-                        <DesktopOutlined className="text-2xl text-blue-400" />
-                    ) : (
-                        <span className={`text-2xl font-bold ${avatarText}`}>{name[0]?.toUpperCase()}</span>
+            {/* 头像覆盖层：当没有视频流或未开启摄像头时显示 */}
+            {!((!isSelf && stream) || (isSelf && cameraOn && !sharing && stream)) && (
+                <div className="relative z-[1] flex flex-col items-center gap-2 pointer-events-none">
+                    <div className={`w-16 h-16 rounded-full ${avatarBg} border-2 flex items-center justify-center backdrop-blur-sm`}>
+                        {sharing ? (
+                            <DesktopOutlined className="text-2xl text-blue-400" />
+                        ) : (
+                            <span className={`text-2xl font-bold ${avatarText}`}>{name[0]?.toUpperCase()}</span>
+                        )}
+                    </div>
+                    <div className="text-gray-200 text-xs font-medium drop-shadow-lg">
+                        {isSelf ? `${name}（我）` : name}
+                    </div>
+                    <div className="flex flex-wrap justify-center gap-x-2 gap-y-0.5">
+                        {statusItems.map((item, i) => (
+                            <span key={i} className={`flex items-center gap-0.5 text-[10px] ${item.color}`}>
+                                {item.icon} {item.text}
+                            </span>
+                        ))}
+                    </div>
+                    {/* 自己共享时显示停止按钮 */}
+                    {isSelf && sharing && onStopShare && (
+                        <Button size="small" danger icon={<DesktopOutlined />} onClick={onStopShare} className="pointer-events-auto mt-1">
+                            停止共享
+                        </Button>
                     )}
                 </div>
-                <div className="text-gray-200 text-xs font-medium drop-shadow-lg">
-                    {isSelf ? `${name}（我）` : name}
-                </div>
-                <div className="flex flex-wrap justify-center gap-x-2 gap-y-0.5">
-                    {statusItems.map((item, i) => (
-                        <span key={i} className={`flex items-center gap-0.5 text-[10px] ${item.color}`}>
-                            {item.icon} {item.text}
-                        </span>
-                    ))}
-                </div>
-                {/* 自己共享时显示停止按钮 */}
-                {isSelf && sharing && onStopShare && (
-                    <Button size="small" danger icon={<DesktopOutlined />} onClick={onStopShare} className="pointer-events-auto mt-1">
-                        停止共享
-                    </Button>
-                )}
-            </div>
+            )}
 
             {/* 底部名牌 */}
             <div className="absolute bottom-2 left-2 z-[2] bg-black/50 backdrop-blur-sm text-white text-[10px] px-2 py-1 rounded-full flex items-center gap-1">

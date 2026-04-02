@@ -5,6 +5,11 @@ const ICE_SERVERS: RTCConfiguration = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
+    {
+      urls: 'turn:16.163.147.228:3478?transport=udp',
+      username: 'testuser',
+      credential: 'testpass123'
+    }
   ],
 }
 
@@ -307,26 +312,30 @@ export class MeshRTCManager {
 
   // ======================== 媒体控制 ========================
   async toggleCamera(enabled: boolean) {
-    if (!this.localStream) return
+    if (!this.localStream) {
+      this._getOrCreateLocalStream()
+    }
     if (enabled) {
       const camStream = await navigator.mediaDevices.getUserMedia({ video: true })
       const newTrack = camStream.getVideoTracks()[0]
       this._replaceTrackAll('video', newTrack)
       newTrack.enabled = true
     } else {
-      this.localStream.getVideoTracks().forEach((t) => (t.enabled = false))
+      this.localStream?.getVideoTracks().forEach((t) => (t.enabled = false))
     }
   }
 
   async toggleMic(enabled: boolean) {
-    if (!this.localStream) return
+    if (!this.localStream) {
+      this._getOrCreateLocalStream()
+    }
     if (enabled) {
       const micStream = await navigator.mediaDevices.getUserMedia({ audio: true })
       const newTrack = micStream.getAudioTracks()[0]
       this._replaceTrackAll('audio', newTrack)
       newTrack.enabled = true
     } else {
-      this.localStream.getAudioTracks().forEach((t) => (t.enabled = false))
+      this.localStream?.getAudioTracks().forEach((t) => (t.enabled = false))
     }
   }
 
