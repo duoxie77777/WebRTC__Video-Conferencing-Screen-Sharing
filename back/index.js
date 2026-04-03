@@ -161,6 +161,34 @@ io.on('connection', (socket) => {
         }
     });
 
+    // 媒体状态同步（发送给指定用户）
+    socket.on('media-status-for-user', (data) => {
+        const targetSocketId = onlineUsers[data.to];
+        if (targetSocketId) {
+            io.to(targetSocketId).emit('media-status', {
+                from: data.from,
+                camera: data.camera,
+                mic: data.mic,
+                sharing: data.sharing
+            });
+        }
+    });
+
+    // ====================== 字幕同步（广播给房间） ======================
+    socket.on('subtitle', (data) => {
+        const roomId = userRoom[data.from];
+        console.log(`[字幕] 用户 ${data.from} 发送字幕: ${data.text}, 房间: ${roomId}`);
+        if (roomId) {
+            // socket.to(roomId) 广播给房间内除发送者外的其他人
+            socket.to(roomId).emit('subtitle', {
+                from: data.from,
+                text: data.text,
+                timestamp: Date.now()
+            });
+            console.log(`[字幕] 已广播到房间 ${roomId} 的其他成员`);
+        }
+    });
+
     // ====================== 断开连接 ======================
     socket.on('disconnect', () => {
         for (const [username, id] of Object.entries(onlineUsers)) {

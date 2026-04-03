@@ -172,8 +172,13 @@ export class MeshRTCManager {
     // 重新协商完成后，检查对方的流并手动触发回调
     // 因为 ontrack 事件在重新协商时不会再次触发
     if (existingInfo) {
+      console.log('[WebRTC] 重新协商场景，准备手动触发 onRemoteStream')
       setTimeout(() => {
         const receivers = pc.getReceivers()
+        console.log('[WebRTC] receivers 数量:', receivers.length)
+        receivers.forEach(r => {
+          console.log('[WebRTC] receiver track:', r.track?.kind, r.track?.enabled, r.track?.muted)
+        })
         const tracks = receivers.map(r => r.track).filter(Boolean) as MediaStreamTrack[]
         
         if (tracks.length > 0) {
@@ -388,9 +393,11 @@ export class MeshRTCManager {
     }
     if (enabled) {
       try {
+        console.log('[Mic] 开始获取麦克风...')
         const micStream = await navigator.mediaDevices.getUserMedia({ audio: true })
         const newTrack = micStream.getAudioTracks()[0]
         newTrack.enabled = true
+        console.log('[Mic] 麦克风轨道获取成功，当前 peers 数量:', this.peers.size)
         await this._replaceTrackAll('audio', newTrack)
         console.log('[Mic] 麦克风已开启并发送到所有用户')
       } catch (error) {
@@ -638,7 +645,12 @@ export class MeshRTCManager {
 
   /** 替换所有 PeerConnection 的轨道 */
   private async _replaceTrackAll(kind: 'audio' | 'video', newTrack: MediaStreamTrack) {
-    if (!this.localStream) return
+    if (!this.localStream) {
+      console.warn('[Media] localStream 不存在，无法替换轨道')
+      return
+    }
+
+    console.log(`[Media] 开始替换 ${kind} 轨道，peers 数量:`, this.peers.size)
 
     const oldTrack = this.localStream.getTracks().find((t) => t.kind === kind)
     if (oldTrack) {
@@ -649,6 +661,7 @@ export class MeshRTCManager {
 
     // 遍历所有 PeerConnection，替换轨道并重新协商
     for (const [user, info] of this.peers) {
+      console.log(`[Media] 处理用户 ${user} 的 ${kind} 轨道`)
       const sender = info.pc.getSenders().find((s) => s.track?.kind === kind)
       
       if (sender) {
@@ -842,6 +855,7 @@ export class MeshRTCManager {
   }
 
   private _onIncomingCall = async (data: { from: string; offer: RTCSessionDescriptionInit }) => {
+    console.log('[WebRTC] 收到 incoming-call，来自:', data.from)
     // 自动接听（多人房间内自动建立连接）
     await this.answerCall(data.from, data.offer)
   }

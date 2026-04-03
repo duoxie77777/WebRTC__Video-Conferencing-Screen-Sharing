@@ -1,4 +1,4 @@
-import { useRef, useEffect, useMemo } from 'react'
+import { useRef, useEffect, useMemo, useState } from 'react'
 import { Button, Modal, Tooltip, message, Dropdown, Tag } from 'antd'
 import {
     CameraOutlined,
@@ -15,6 +15,7 @@ import {
 } from '@ant-design/icons'
 import type { Participant } from '../../../../types/participant'
 import { isElectron } from '../../../../utils/remote-control'
+import type { SubtitleItem } from '../SubtitleDisplay'
 
 // ======================== 统一用户卡片 ========================
 interface UserCardProps {
@@ -27,10 +28,11 @@ interface UserCardProps {
     onStopShare?: () => void
     isBeingControlled?: boolean
     compact?: boolean
-    onClick?: () => void  // 点击放大
+    onClick?: () => void
+    subtitle?: string
 }
 
-const UserCard = ({ name, isSelf, cameraOn, micOn, sharing, stream, onStopShare, isBeingControlled, compact, onClick }: UserCardProps) => {
+const UserCard = ({ name, isSelf, cameraOn, micOn, sharing, stream, onStopShare, isBeingControlled, compact, onClick, subtitle }: UserCardProps) => {
     const videoRef = useRef<HTMLVideoElement>(null)
 
     useEffect(() => {
@@ -48,6 +50,9 @@ const UserCard = ({ name, isSelf, cameraOn, micOn, sharing, stream, onStopShare,
     // - 自己：cameraOn + stream + 不在共享
     const showVideo = (!isSelf && stream && cameraOn) || (isSelf && cameraOn && !sharing && stream)
 
+    // 对于远程用户，始终需要渲染视频元素以播放音频
+    const needAudioElement = !isSelf && stream
+
     return (
         <div
             className={`bg-gradient-to-b from-gray-800 to-gray-900 rounded-xl relative flex items-center justify-center overflow-hidden w-full h-full ${onClick ? 'cursor-pointer active:scale-[0.98] transition-transform' : ''}`}
@@ -61,13 +66,14 @@ const UserCard = ({ name, isSelf, cameraOn, micOn, sharing, stream, onStopShare,
             )}
 
             {/* 视频画面 - object-contain 保持比例不拉伸 */}
-            {showVideo && (
+            {/* 对于远程用户，始终渲染视频元素以播放音频，即使不显示视频 */}
+            {(showVideo || needAudioElement) && (
                 <video
                     ref={videoRef}
                     autoPlay
                     playsInline
                     muted={isSelf}
-                    className="absolute inset-0 w-full h-full object-contain bg-gray-900"
+                    className={`absolute inset-0 w-full h-full object-contain bg-gray-900 ${showVideo ? '' : 'invisible'}`}
                     style={isSelf ? { transform: 'scaleX(-1)' } : undefined}
                 />
             )}
@@ -131,6 +137,13 @@ const UserCard = ({ name, isSelf, cameraOn, micOn, sharing, stream, onStopShare,
                 {isBeingControlled && <ControlOutlined className="text-red-400" />}
                 {isSelf ? '我' : name}
             </div>
+
+            {/* 字幕显示 */}
+            {subtitle && !compact && (
+                <div className="absolute bottom-8 left-1 right-1 z-[10] bg-black/80 backdrop-blur-sm text-white px-3 py-2 rounded-lg text-sm text-center">
+                    {subtitle}
+                </div>
+            )}
         </div>
     )
 }
@@ -151,8 +164,9 @@ interface MeetingContentProps {
     onStopScreenShare: () => void
     onToggleCamera: (enabled: boolean) => void
     onToggleMic: (enabled: boolean) => void
-    onRequestRemoteControl?: (user: string) => void  // 请求控制远端用户
-    controllingUser?: string | null  // 当前正在控制的用户
+    onRequestRemoteControl?: (user: string) => void
+    controllingUser?: string | null
+    subtitles: SubtitleItem[]
 }
 
 const MeetingContent = ({
@@ -172,6 +186,7 @@ const MeetingContent = ({
     onToggleMic,
     onRequestRemoteControl,
     controllingUser,
+    subtitles,
 }: MeetingContentProps) => {
     const screenVideoRef = useRef<HTMLVideoElement>(null)
 
@@ -220,6 +235,29 @@ const MeetingContent = ({
     const totalUsers = participants.size + 1 // 包含自己
     const gridCols = totalUsers <= 1 ? 1 : totalUsers <= 4 ? 2 : totalUsers <= 9 ? 3 : 4
     const gridRows = Math.ceil(totalUsers / gridCols)
+
+    // 获取每个用户的最新字幕（需要定期更新以实现自动消失）
+    const [userSubtitles, setUserSubtitles] = useState<Map<string, string>>(new Map())
+
+    useEffect(() => {
+        const updateSubtitles = () => {
+            const map = new Map<string, string>()
+            const now = Date.now()
+            for (const sub of subtitles) {
+                if (now - sub.timestamp < 4000) {
+                    map.set(sub.from, sub.text)
+                }
+            }
+            if (map.size > 0) {
+                console.log('[字幕] 当前显示的字幕:', Object.fromEntries(map))
+            }
+            setUserSubtitles(map)
+        }
+
+        updateSubtitles()
+        const timer = setInterval(updateSubtitles, 500)
+        return () => clearInterval(timer)
+    }, [subtitles])
 
     // 未在房间中
     if (!inRoom) {
@@ -343,6 +381,7 @@ const MeetingContent = ({
                             sharing={isSharing}
                             stream={localStream}
                             onStopShare={onStopScreenShare}
+                            subtitle={userSubtitles.get(currentUser)}
                         />
 
                         {/* 其他参与者 */}
@@ -355,6 +394,7 @@ const MeetingContent = ({
                                 sharing={p.sharing}
                                 stream={p.stream}
                                 isBeingControlled={controllingUser === user}
+                                subtitle={userSubtitles.get(user)}
                             />
                         ))}
                     </div>

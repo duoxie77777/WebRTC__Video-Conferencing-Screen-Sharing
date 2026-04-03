@@ -8,7 +8,9 @@ import Login from '../login'
 import { connectAndLogin, disconnectSocket, getSocket } from '../../utils/socket'
 import { MeshRTCManager } from '../../utils/webrtc'
 import { RemoteControlManager, RemoteControlExecutor, canBeControlled } from '../../utils/remote-control'
+import { SpeechRecognitionService } from '../../utils/speechRecognition'
 import type { Participant } from '../../types/participant'
+import type { SubtitleItem } from './components/SubtitleDisplay'
 
 const MeetingRoom = () => {
     const [username, setUsername] = useState<string | null>(
@@ -38,6 +40,14 @@ const MeetingRoom = () => {
     const remoteControlExecutorRef = useRef<RemoteControlExecutor>(new RemoteControlExecutor())
 
     const rtcRef = useRef<MeshRTCManager | null>(null)
+
+    // 字幕状态
+    const [subtitles, setSubtitles] = useState<SubtitleItem[]>([])
+    const speechRecognitionRef = useRef<SpeechRecognitionService | null>(null)
+
+    // 用 ref 保存最新的媒体状态，解决闭包问题
+    const mediaStateRef = useRef({ isCameraOn: false, isMicOn: false, isSharing: false })
+    mediaStateRef.current = { isCameraOn, isMicOn, isSharing }
 
     // 自动连接 socket
     useEffect(() => {
@@ -69,6 +79,7 @@ const MeetingRoom = () => {
         const socket = getSocket()
         socket.emit('leave-room', { username })
         rtcRef.current?.hangupAll()
+        speechRecognitionRef.current?.stop()
         setRoomId(null)
         setInRoom(false)
         setParticipants(new Map())
@@ -77,6 +88,7 @@ const MeetingRoom = () => {
         setIsSharing(false)
         setLocalStream(null)
         setScreenSharer(null)
+        setSubtitles([])
     }, [username])
 
     // ======================== 初始化 MeshRTCManager ========================
@@ -170,6 +182,47 @@ const MeetingRoom = () => {
         }
     }, [username])
 
+    // ======================== 初始化语音识别服务 ========================
+    useEffect(() => {
+        if (!username) return
+
+        const speechService = new SpeechRecognitionService()
+        speechRecognitionRef.current = speechService
+
+        if (speechService.isSupported()) {
+            console.log('[字幕] 语音识别服务已初始化')
+            speechService.onSubtitle((text) => {
+                console.log('[字幕] 识别到语音:', text)
+                
+                // 直接添加到本地字幕列表
+                setSubtitles((prev) => {
+                    const newSubtitle: SubtitleItem = {
+                        id: `${username}-${Date.now()}`,
+                        from: username,
+                        text: text,
+                        timestamp: Date.now(),
+                    }
+                    const next = [...prev, newSubtitle]
+                    if (next.length > 20) {
+                        return next.slice(-20)
+                    }
+                    return next
+                })
+                
+                // 同时发送给服务器广播给其他人
+                const socket = getSocket()
+                socket.emit('subtitle', { from: username, text })
+            })
+        } else {
+            console.warn('[字幕] 浏览器不支持语音识别，字幕功能不可用')
+        }
+
+        return () => {
+            speechService.destroy()
+            speechRecognitionRef.current = null
+        }
+    }, [username])
+
     // ======================== 监听房间事件 ========================
     useEffect(() => {
         if (!username) return
@@ -190,8 +243,19 @@ const MeetingRoom = () => {
             addParticipant(data.username)
             message.info(`${data.username} 加入了会议`)
             
+            // 发送自己的媒体状态给新用户
+            const socket = getSocket()
+            const { isCameraOn: camera, isMicOn: mic, isSharing: sharing } = mediaStateRef.current
+            socket.emit('media-status-for-user', {
+                from: username,
+                to: data.username,
+                camera,
+                mic,
+                sharing
+            })
+            
             // 如果当前正在共享屏幕，向新用户发送屏幕流
-            if (isSharing && rtcRef.current?.screenStream) {
+            if (sharing && rtcRef.current?.screenStream) {
                 // 等待新用户建立基础连接后再发送屏幕流
                 setTimeout(async () => {
                     try {
@@ -262,12 +326,31 @@ const MeetingRoom = () => {
             setScreenSharer((prev) => (prev === data.from ? null : prev))
         }
 
+        // 字幕同步
+        const onSubtitle = (data: { from: string; text: string; timestamp: number }) => {
+            console.log('[字幕] 收到字幕:', data.from, data.text)
+            setSubtitles((prev) => {
+                const newSubtitle: SubtitleItem = {
+                    id: `${data.from}-${data.timestamp}`,
+                    from: data.from,
+                    text: data.text,
+                    timestamp: data.timestamp,
+                }
+                const next = [...prev, newSubtitle]
+                if (next.length > 20) {
+                    return next.slice(-20)
+                }
+                return next
+            })
+        }
+
         socket.on('room-members', onRoomMembers)
         socket.on('user-joined', onUserJoined)
         socket.on('user-left', onUserLeft)
         socket.on('invite', onInvite)
         socket.on('media-status', onMediaStatus)
         socket.on('stop-screen-share', onStopScreenShare)
+        socket.on('subtitle', onSubtitle)
 
         return () => {
             socket.off('room-members', onRoomMembers)
@@ -276,6 +359,7 @@ const MeetingRoom = () => {
             socket.off('invite', onInvite)
             socket.off('media-status', onMediaStatus)
             socket.off('stop-screen-share', onStopScreenShare)
+            socket.off('subtitle', onSubtitle)
         }
     }, [username, addParticipant, joinRoom, isSharing])
 
@@ -322,6 +406,15 @@ const MeetingRoom = () => {
     }, [broadcastMediaStatus, isMicOn, isSharing])
 
     const handleToggleMic = useCallback(async (enabled: boolean) => {
+        // 先启动语音识别（必须在用户交互上下文中）
+        if (enabled && inRoom) {
+            console.log('[字幕] 麦克风开启，启动语音识别')
+            speechRecognitionRef.current?.start()
+        } else {
+            console.log('[字幕] 麦克风关闭，停止语音识别')
+            speechRecognitionRef.current?.stop()
+        }
+        
         try {
             await rtcRef.current?.toggleMic(enabled)
             setIsMicOn(enabled)
@@ -329,7 +422,7 @@ const MeetingRoom = () => {
         } catch {
             message.error('无法访问麦克风')
         }
-    }, [broadcastMediaStatus, isCameraOn, isSharing])
+    }, [broadcastMediaStatus, isCameraOn, isSharing, inRoom])
 
     const handleStartScreenShare = useCallback(async () => {
         if (!rtcRef.current) return
@@ -490,6 +583,7 @@ const MeetingRoom = () => {
                 onToggleMic={handleToggleMic}
                 onRequestRemoteControl={handleRequestRemoteControl}
                 controllingUser={controllingUser}
+                subtitles={subtitles}
             />
             <RegionPicker
                 open={regionPickerOpen}
