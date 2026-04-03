@@ -138,6 +138,17 @@ export class MeshRTCManager {
       // 重新协商：使用已有的 PeerConnection
       console.log('[WebRTC] 检测到重新协商，使用已有连接')
       pc = existingInfo.pc
+      
+      // 确保本地流的轨道都已添加（即使是静默流）
+      const senders = pc.getSenders()
+      const existingKinds = senders.map(s => s.track?.kind).filter(Boolean)
+      
+      stream.getTracks().forEach((track) => {
+        if (!existingKinds.includes(track.kind)) {
+          console.log(`[WebRTC] 重新协商时添加新 ${track.kind} 轨道`)
+          pc.addTrack(track, stream)
+        }
+      })
     } else {
       // 新连接：创建新的 PeerConnection
       console.log('[WebRTC] 创建新的 PeerConnection')
@@ -157,6 +168,21 @@ export class MeshRTCManager {
       to: from,
       answer,
     })
+
+    // 重新协商完成后，检查对方的流并手动触发回调
+    // 因为 ontrack 事件在重新协商时不会再次触发
+    if (existingInfo) {
+      setTimeout(() => {
+        const receivers = pc.getReceivers()
+        const tracks = receivers.map(r => r.track).filter(Boolean) as MediaStreamTrack[]
+        
+        if (tracks.length > 0) {
+          console.log(`[WebRTC] 重新协商后手动触发 onRemoteStream，轨道数: ${tracks.length}`)
+          const remoteStream = new MediaStream(tracks)
+          this.onRemoteStream?.(from, remoteStream)
+        }
+      }, 1000) // 增加延迟，确保轨道已经同步
+    }
   }
 
   // ======================== 离开（挂断所有人） ========================
@@ -340,14 +366,19 @@ export class MeshRTCManager {
       this._getOrCreateLocalStream()
     }
     if (enabled) {
-      const camStream = await navigator.mediaDevices.getUserMedia({ video: true })
-      const newTrack = camStream.getVideoTracks()[0]
-      this._replaceTrackAll('video', newTrack)
-      newTrack.enabled = true
-      // 重新协商所有 PeerConnection，确保视频轨道更新
-      await this.reNegotiateAllPeers()
+      try {
+        const camStream = await navigator.mediaDevices.getUserMedia({ video: true })
+        const newTrack = camStream.getVideoTracks()[0]
+        newTrack.enabled = true
+        await this._replaceTrackAll('video', newTrack)
+        console.log('[Camera] 摄像头已开启并发送到所有用户')
+      } catch (error) {
+        console.error('[Camera] 开启摄像头失败:', error)
+        throw error
+      }
     } else {
       this.localStream?.getVideoTracks().forEach((t) => (t.enabled = false))
+      console.log('[Camera] 摄像头已关闭')
     }
   }
 
@@ -356,12 +387,19 @@ export class MeshRTCManager {
       this._getOrCreateLocalStream()
     }
     if (enabled) {
-      const micStream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      const newTrack = micStream.getAudioTracks()[0]
-      this._replaceTrackAll('audio', newTrack)
-      newTrack.enabled = true
+      try {
+        const micStream = await navigator.mediaDevices.getUserMedia({ audio: true })
+        const newTrack = micStream.getAudioTracks()[0]
+        newTrack.enabled = true
+        await this._replaceTrackAll('audio', newTrack)
+        console.log('[Mic] 麦克风已开启并发送到所有用户')
+      } catch (error) {
+        console.error('[Mic] 开启麦克风失败:', error)
+        throw error
+      }
     } else {
       this.localStream?.getAudioTracks().forEach((t) => (t.enabled = false))
+      console.log('[Mic] 麦克风已关闭')
     }
   }
 
@@ -599,7 +637,7 @@ export class MeshRTCManager {
   }
 
   /** 替换所有 PeerConnection 的轨道 */
-  private _replaceTrackAll(kind: 'audio' | 'video', newTrack: MediaStreamTrack) {
+  private async _replaceTrackAll(kind: 'audio' | 'video', newTrack: MediaStreamTrack) {
     if (!this.localStream) return
 
     const oldTrack = this.localStream.getTracks().find((t) => t.kind === kind)
@@ -609,9 +647,35 @@ export class MeshRTCManager {
     }
     this.localStream.addTrack(newTrack)
 
-    for (const [, info] of this.peers) {
-      const sender = info.pc.getSenders().find((s) => s.track?.kind === kind || (!s.track && kind === 'video'))
-      sender?.replaceTrack(newTrack)
+    // 遍历所有 PeerConnection，替换轨道并重新协商
+    for (const [user, info] of this.peers) {
+      const sender = info.pc.getSenders().find((s) => s.track?.kind === kind)
+      
+      if (sender) {
+        // 使用更温和的方式替换轨道，避免连接断开
+        console.log(`[Media] 替换 ${kind} 轨道到 ${user}`)
+        await sender.replaceTrack(newTrack)
+        console.log(`[Media] ${kind} 轨道替换成功`)
+      } else {
+        // 如果没有发送器，添加新轨道
+        info.pc.addTrack(newTrack, this.localStream)
+        console.log(`[Media] 添加新 ${kind} 轨道到 ${user}`)
+      }
+
+      // 触发重新协商，确保新轨道被发送到对方
+      try {
+        const offer = await info.pc.createOffer()
+        await info.pc.setLocalDescription(offer)
+        
+        getSocket().emit('call', {
+          from: this.currentUser,
+          to: user,
+          offer,
+        })
+        console.log(`[Media] 发送 ${kind} 轨道重新协商到 ${user}`)
+      } catch (error) {
+        console.error(`[Media] 重新协商失败 ${user}:`, error)
+      }
     }
   }
 
@@ -625,18 +689,69 @@ export class MeshRTCManager {
   private _createPC(remoteUser: string, type: 'call' | 'screen'): RTCPeerConnection {
     const pc = new RTCPeerConnection(ICE_SERVERS)
 
+    // 添加 ICE 候选收集调试信息
+    let iceCandidatesCount = 0
+    let iceCandidates: RTCIceCandidate[] = []
+
     pc.onicecandidate = (e) => {
       if (e.candidate) {
+        iceCandidatesCount++
+        iceCandidates.push(e.candidate)
+        
+        // 详细记录每个 ICE 候选
+        console.log(`[ICE ${type}] ${this.currentUser} -> ${remoteUser} 候选 #${iceCandidatesCount}:`, {
+          type: e.candidate.type,
+          protocol: e.candidate.protocol,
+          address: e.candidate.address,
+          port: e.candidate.port,
+          candidate: e.candidate.candidate
+        })
+
         const event = type === 'call' ? 'ice-candidate' : 'screen-ice-candidate'
         getSocket().emit(event, {
           from: this.currentUser,
           to: remoteUser,
           candidate: e.candidate,
         })
+      } else {
+        // ICE 收集完成
+        console.log(`[ICE ${type}] ${this.currentUser} -> ${remoteUser} ICE 候选收集完成，共 ${iceCandidatesCount} 个候选`)
+        console.log(`[ICE ${type}] 候选类型统计:`, {
+          host: iceCandidates.filter(c => c.type === 'host').length,
+          srflx: iceCandidates.filter(c => c.type === 'srflx').length,
+          relay: iceCandidates.filter(c => c.type === 'relay').length
+        })
+        
+        // 检查是否有 relay 候选（TURN 服务器）
+        const hasRelay = iceCandidates.some(c => c.type === 'relay')
+        if (!hasRelay) {
+          console.warn(`[ICE ${type}] ${this.currentUser} -> ${remoteUser} 警告：没有找到 relay 候选，TURN 服务器可能无法连接！`)
+        }
       }
     }
 
+    // 监听 ICE 连接状态变化
+    pc.oniceconnectionstatechange = () => {
+      console.log(`[ICE ${type}] ${this.currentUser} -> ${remoteUser} 连接状态: ${pc.iceConnectionState}`)
+      if (pc.iceConnectionState === 'failed') {
+        console.error(`[ICE ${type}] ${this.currentUser} -> ${remoteUser} 连接失败！`)
+      }
+    }
+
+    // 监听连接状态变化
+    pc.onconnectionstatechange = () => {
+      console.log(`[Connection ${type}] ${this.currentUser} -> ${remoteUser} 状态: ${pc.connectionState}`)
+    }
+
     pc.ontrack = (e) => {
+      console.log(`[Track ${type}] ${this.currentUser} <- ${remoteUser} 收到媒体流:`, {
+        trackCount: e.streams[0]?.getTracks().length,
+        tracks: e.streams[0]?.getTracks().map(t => ({
+          kind: t.kind,
+          enabled: t.enabled,
+          muted: t.muted
+        }))
+      })
       if (type === 'call') {
         this.onRemoteStream?.(remoteUser, e.streams[0])
       } else {
@@ -658,7 +773,9 @@ export class MeshRTCManager {
       // 存储 peer 信息
       const existing = this.peers.get(remoteUser)
       if (existing) {
-        existing.pc = pc
+        // 如果已存在，不要替换，保持原有的 PeerConnection
+        // 这种情况发生在重新协商时，但我们不应该创建新的 PC
+        console.log(`[WebRTC] 已存在 peer 连接，不替换 ${remoteUser}`)
       } else {
         this.peers.set(remoteUser, { pc, screenPc: null, dataChannel: null })
       }

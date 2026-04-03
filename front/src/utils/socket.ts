@@ -1,6 +1,6 @@
 import { io, Socket } from 'socket.io-client'
 
-const SOCKET_URL = import.meta.env.VITE_API_BASE_URL || 'https://duoxie.cc.cd'
+const SOCKET_URL = import.meta.env.VITE_API_BASE_URL || 'https://16.163.147.228:8989'
 
 // 全局唯一 socket 实例，永不销毁，只断开/重连
 let socket: Socket | null = null

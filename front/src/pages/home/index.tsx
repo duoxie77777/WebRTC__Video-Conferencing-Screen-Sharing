@@ -86,6 +86,10 @@ const MeetingRoom = () => {
         const manager = new MeshRTCManager(username)
 
         manager.onRemoteStream = (user, stream) => {
+            console.log(`[Home] 收到 ${user} 的媒体流:`, {
+                trackCount: stream.getTracks().length,
+                tracks: stream.getTracks().map(t => ({ kind: t.kind, enabled: t.enabled, muted: t.muted }))
+            })
             setParticipants((prev) => {
                 const next = new Map(prev)
                 const existing = next.get(user)
@@ -93,6 +97,7 @@ const MeetingRoom = () => {
                     ? { ...existing, stream }
                     : { name: user, stream, screenStream: null, cameraOn: false, micOn: false, sharing: false }
                 next.set(user, p)
+                console.log(`[Home] 更新 ${user} 的参与者信息，stream:`, p.stream ? '有' : '无')
                 return next
             })
         }
@@ -307,7 +312,10 @@ const MeetingRoom = () => {
             // 更新本地流引用，让自己的画面能显示
             const stream = rtcRef.current?.getLocalStream() || null
             setLocalStream(stream ? new MediaStream(stream.getTracks()) : null)
-            broadcastMediaStatus(enabled, isMicOn, isSharing)
+            // 延迟发送媒体状态，确保 WebRTC 重新协商完成
+            setTimeout(() => {
+                broadcastMediaStatus(enabled, isMicOn, isSharing)
+            }, 1000)
         } catch {
             message.error('无法访问摄像头')
         }
