@@ -15,7 +15,7 @@ interface ApiResponse<T = any> {
 
 // 创建 axios 实例
 const service: AxiosInstance = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || 'https://duoxie.cc.cd',
+  baseURL: import.meta.env.VITE_API_BASE_URL || 'xxx',
   timeout: 15000,
   headers: {
     'Content-Type': 'application/json',
