@@ -33,7 +33,7 @@ const MeetingRoom = () => {
     
     // 远程控制状态
     const [controllingUser, setControllingUser] = useState<string | null>(null)  // 正在控制的用户
-    const [sidebarVisible, setSidebarVisible] = useState(true)  // 侧边栏可见性
+    const [sidebarVisible, setSidebarVisible] = useState(() => window.innerWidth >= 768)  // 手机端默认隐藏侧边栏
     const remoteControlManagerRef = useRef<RemoteControlManager>(new RemoteControlManager())
     const remoteControlExecutorRef = useRef<RemoteControlExecutor>(new RemoteControlExecutor())
 
@@ -88,8 +88,10 @@ const MeetingRoom = () => {
         manager.onRemoteStream = (user, stream) => {
             setParticipants((prev) => {
                 const next = new Map(prev)
-                const p = next.get(user) || { name: user, stream: null, screenStream: null, cameraOn: false, micOn: false, sharing: false }
-                p.stream = stream
+                const existing = next.get(user)
+                const p = existing
+                    ? { ...existing, stream }
+                    : { name: user, stream, screenStream: null, cameraOn: false, micOn: false, sharing: false }
                 next.set(user, p)
                 return next
             })
@@ -98,8 +100,10 @@ const MeetingRoom = () => {
         manager.onRemoteScreenStream = (user, stream) => {
             setParticipants((prev) => {
                 const next = new Map(prev)
-                const p = next.get(user) || { name: user, stream: null, screenStream: null, cameraOn: false, micOn: false, sharing: false }
-                p.screenStream = stream
+                const existing = next.get(user)
+                const p = existing
+                    ? { ...existing, screenStream: stream }
+                    : { name: user, stream: null, screenStream: stream, cameraOn: false, micOn: false, sharing: false }
                 next.set(user, p)
                 return next
             })
@@ -448,7 +452,7 @@ const MeetingRoom = () => {
     }
 
     return (
-        <div className="flex w-full h-screen">
+        <div className="flex w-full h-screen overflow-hidden">
             <UserSidebar
                 currentUser={username}
                 inRoom={inRoom}

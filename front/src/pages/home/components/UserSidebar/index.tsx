@@ -40,7 +40,6 @@ const UserSidebar = ({
             socket.off('online-users', handleOnlineUsers)
         }
     }, [currentUser])
-    console.log(currentUser)
     // 不包含自己
     const otherUsers = onlineUsers.filter((u) => u !== currentUser)
     // 已在房间内的用户
@@ -76,16 +75,24 @@ const UserSidebar = ({
     }
 
     return (
-        <div className="relative">
+        <>
+            {/* 手机端遮罩层 - 点击关闭侧边栏 */}
+            {visible && (
+                <div
+                    className="fixed inset-0 bg-black/40 z-[19] md:hidden"
+                    onClick={onToggleVisible}
+                />
+            )}
+
+            {/* 侧边栏主体：手机端始终 fixed 浮层，PC端 visible 时参与 flex 流 */}
             <div 
-                className={`w-64 h-screen bg-white border-r border-gray-200 p-4 flex flex-col justify-between transition-all duration-300 ${
+                className={`w-64 h-screen bg-white border-r border-gray-200 p-4 flex flex-col transition-transform duration-300 shrink-0 z-20 ${
                     visible ? 'translate-x-0' : '-translate-x-full'
-                }`}
-                style={{ position: visible ? 'relative' : 'absolute', zIndex: 20 }}
+                } ${visible ? 'fixed md:relative' : 'fixed'}`}
             >
-                <div className="flex flex-col gap-3 overflow-hidden">
+                <div className="flex flex-col gap-3 flex-1 min-h-0">
                 {/* 当前用户 */}
-                <div className="pb-3 border-b border-gray-100 flex items-center gap-2">
+                <div className="pb-3 border-b border-gray-100 flex items-center gap-2 shrink-0">
                     <Avatar style={{ backgroundColor: '#1677ff' }}>
                         {currentUser[0]}
                     </Avatar>
@@ -99,7 +106,7 @@ const UserSidebar = ({
 
                 {/* 房间状态 */}
                 {inRoom ? (
-                    <div className="pb-3 border-b border-gray-100">
+                    <div className="pb-3 border-b border-gray-100 shrink-0">
                         <div className="flex items-center justify-between mb-2">
                             <span className="text-xs text-gray-500 flex items-center gap-1">
                                 <TeamOutlined /> 会议中 · {participants.size + 1} 人
@@ -121,7 +128,7 @@ const UserSidebar = ({
                         </div>
                     </div>
                 ) : (
-                    <div className="pb-3 border-b border-gray-100">
+                    <div className="pb-3 border-b border-gray-100 shrink-0">
                         <Button
                             type="primary"
                             icon={<PlusOutlined />}
@@ -134,12 +141,12 @@ const UserSidebar = ({
                 )}
 
                 {/* 在线用户列表 */}
-                <div className="pb-2">
+                <div className="pb-2 shrink-0">
                     <h2 className="text-sm font-semibold text-gray-800">在线用户</h2>
                     <p className="text-xs text-gray-400 mt-0.5">共 {onlineUsers.length} 人在线</p>
                 </div>
 
-                <div className="flex-1 overflow-y-auto">
+                <div className="flex-1 overflow-y-auto min-h-0">
                     <List
                         itemLayout="horizontal"
                         // 作用是让自己排在第一
@@ -179,35 +186,37 @@ const UserSidebar = ({
                 </div>
             </div>
 
-            <Button
-                type="default"
-                danger
-                icon={<LogoutOutlined />}
-                onClick={handleLogout}
-            >
-                退出登录
-            </Button>
+            <div className="shrink-0 pt-3 border-t border-gray-100">
+                <Button
+                    type="default"
+                    danger
+                    icon={<LogoutOutlined />}
+                    onClick={handleLogout}
+                    block
+                >
+                    退出登录
+                </Button>
+            </div>
         </div>
 
-        {/* 切换按钮 - 附着在侧边栏右边缘 */}
+        {/* 切换按钮 */}
         {onToggleVisible && (
             <Button
                 type="primary"
                 icon={visible ? <MenuFoldOutlined /> : <MenuOutlined />}
                 onClick={onToggleVisible}
-                className={`absolute top-1/2 -translate-y-1/2 transition-all duration-300 shadow-lg ${
-                    visible ? 'left-64' : 'left-0'
-                }`}
+                className="fixed top-1/2 -translate-y-1/2 transition-all duration-300 shadow-lg"
                 style={{
+                    left: visible ? 256 : 0,
                     borderTopLeftRadius: 0,
                     borderBottomLeftRadius: 0,
-                    height: '60px',
-                    width: '32px',
+                    height: '48px',
+                    width: '28px',
                     zIndex: 30,
                 }}
             />
         )}
-    </div>
+    </>
     )
 }
 
